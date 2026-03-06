@@ -2,27 +2,34 @@ import json
 import os
 import requests
 
-# 从 GitHub 读取股票池（这样数据不会丢失）
+# 从 GitHub 读取股票池
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/TanisQ/stock-monitor/main/data/stock_pool.json"
-LOCAL_POOL_FILE = "/tmp/stock_pool.json"  # Streamlit Cloud 可写目录
+LOCAL_POOL_FILE = "/tmp/stock_pool.json"
 
 def load_stock_pool():
-    """从 GitHub 加载股票池"""
+    """加载股票池"""
     try:
-        # 优先从 GitHub 获取最新数据
+        # 优先从 GitHub 获取
         response = requests.get(GITHUB_RAW_URL, timeout=5)
         if response.status_code == 200:
-            # 保存到本地临时文件（用于修改）
-            with open(LOCAL_POOL_FILE, "w", encoding="utf-8") as f:
-                f.write(response.text)
-            return response.json()
+            data = response.json()
+            if data and isinstance(data, list):
+                # 保存到本地临时文件
+                with open(LOCAL_POOL_FILE, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                return data
     except Exception as e:
         print(f"从GitHub加载失败: {e}")
     
-    # 如果 GitHub 获取失败，使用本地文件
-    if os.path.exists(LOCAL_POOL_FILE):
-        with open(LOCAL_POOL_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+    # 使用本地文件
+    try:
+        if os.path.exists(LOCAL_POOL_FILE):
+            with open(LOCAL_POOL_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data and isinstance(data, list):
+                    return data
+    except:
+        pass
     
     # 默认股票池
     return [
@@ -33,7 +40,7 @@ def load_stock_pool():
     ]
 
 def save_stock_pool(stock_pool):
-    """保存股票池到本地（临时）"""
+    """保存股票池到本地"""
     try:
         with open(LOCAL_POOL_FILE, "w", encoding="utf-8") as f:
             json.dump(stock_pool, f, ensure_ascii=False, indent=2)
@@ -70,6 +77,11 @@ def remove_stock(code):
 
 def get_industries():
     """获取所有行业分类"""
-    stock_pool = load_stock_pool()
-    industries = list(set([s.get("industry", "未分类") for s in stock_pool if s.get("industry")]))
-    return sorted(industries)
+    try:
+        stock_pool = load_stock_pool()
+        if not stock_pool:
+            return []
+        industries = list(set([s.get("industry", "未分类") for s in stock_pool if s.get("industry")]))
+        return sorted(industries)
+    except:
+        return []
