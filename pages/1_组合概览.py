@@ -5,98 +5,147 @@ import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import load_stock_pool, add_stock, remove_stock, save_stock_pool
-from utils.data_fetcher import get_realtime_quote, get_stock_name
+from config import load_stock_pool, add_stock, remove_stock
+from utils.data_fetcher import get_realtime_quote, get_stock_market_cap, search_stock_by_name
+from utils.technical import calculate_all_indicators
+from utils.scoring import calculate_technical_score, get_score_color
+from utils.data_fetcher import get_stock_data
 
 st.title("📈 组合概览")
 
-# 股票池管理
-col1, col2 = st.columns([2, 1])
+# ========== 添加股票区域 ==========
+st.subheader("➕ 添加股票")
+
+col1, col2 = st.columns([3, 1])
 
 with col1:
-    st.subheader("当前股票池")
-    stock_pool = load_stock_pool()
-    
-    if stock_pool:
-        # 获取实时行情
-        codes = [s["code"] for s in stock_pool]
-        realtime_df = get_realtime_quote(codes)
+    # 方式1：按名称搜索（推荐）
+    with st.form("search_stock_form", clear_on_submit=True):
+        search_name = st.text_input("输入股票名称或简称", placeholder="如: 茅台、宁德、平安")
+        tags_input = st.text_input("行业标签（用逗号分隔）", placeholder="如: 白酒,价值投资,龙头")
         
-        if realtime_df is not None and not realtime_df.empty:
-            # 合并股票池信息和实时行情
-            display_data = []
-            for stock in stock_pool:
-                code = stock["code"]
-                stock_data = realtime_df[realtime_df["代码"] == code]
-                if not stock_data.empty:
-                    row = stock_data.iloc[0]
-                    # 安全获取字段
-                    try:
-                        latest_price = row.get('最新价', row.get('close', '-'))
-                        change_pct = row.get('涨跌幅', row.get('pct_change', 0))
-                        change_amt = row.get('涨跌额', row.get('change', 0))
-                        volume = row.get('成交量', row.get('vol', 0))
+        if st.form_submit_button("🔍 搜索并添加", use_container_width=True):
+            if search_name:
+                with st.spinner("搜索中..."):
+                    code, full_name, industry = search_stock_by_name(search_name)
+                    if code:
+                        # 合并标签：行业 + 用户输入
+                        all_tags = industry
+                        if tags_input:
+                            all_tags = f"{industry},{tags_input}" if industry else tags_input
                         
-                        display_data.append({
-                            "代码": code,
-                            "名称": stock["name"],
-                            "最新价": f"{float(latest_price):.2f}" if pd.notna(latest_price) else "-",
-                            "涨跌幅": f"{float(change_pct):.2f}%" if pd.notna(change_pct) else "-",
-                            "涨跌额": f"{float(change_amt):.2f}" if pd.notna(change_amt) else "-",
-                            "成交量": f"{float(volume)/10000:.0f}万" if pd.notna(volume) else "-",
-                            "所属行业": stock.get("category", "-")
-                        })
-                    except Exception as e:
-                        # 如果获取字段失败，只显示基本信息
-                        display_data.append({
-                            "代码": code,
-                            "名称": stock["name"],
-                            "最新价": "-",
-                            "涨跌幅": "-",
-                            "涨跌额": "-",
-                            "成交量": "-",
-                            "所属行业": stock.get("category", "-")
-                        })
-            
-            df_display = pd.DataFrame(display_data)
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
-        else:
-            st.info("实时行情获取失败，显示股票列表")
-            for stock in stock_pool:
-                st.text(f"{stock['code']} - {stock['name']}")
-    else:
-        st.info("股票池为空，请添加股票")
+                        success, msg = add_stock(code, full_name, all_tags)
+                        if success:
+                            st.success(f"✅ 添加成功: {full_name} ({code})")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.error(f"未找到 '{search_name}'，请检查名称")
+            else:
+                st.error("请输入股票名称")
 
 with col2:
-    st.subheader("添加股票")
-    with st.form("add_stock_form", clear_on_submit=True):
-        new_code = st.text_input("股票代码", placeholder="如: 600426")
-        new_name = st.text_input("股票名称", placeholder="如: 华鲁恒升")
-        new_category = st.text_input("所属行业", placeholder="如: 化工")
-        
-        submitted = st.form_submit_button("➕ 添加", use_container_width=True)
-        if submitted:
-            if new_code and new_name:
-                if len(new_code) == 6 and new_code.isdigit():
-                    success, msg = add_stock(new_code, new_name, new_category)
+    # 方式2：手动输入代码（备用）
+    with st.expander("手动输入代码"):
+        with st.form("manual_add_form", clear_on_submit=True):
+            manual_code = st.text_input("股票代码", placeholder="600519")
+            manual_name = st.text_input("股票名称", placeholder="贵州茅台")
+            manual_tags = st.text_input("标签", placeholder="白酒,龙头")
+            
+            if st.form_submit_button("添加"):
+                if manual_code and manual_name and len(manual_code) == 6:
+                    success, msg = add_stock(manual_code, manual_name, manual_tags)
                     if success:
                         st.success(msg)
                         st.rerun()
                     else:
                         st.error(msg)
-                else:
-                    st.error("股票代码应为6位数字")
-            else:
-                st.error("请填写股票代码和名称")
+
+# ========== 当前持仓区域 ==========
+st.divider()
+st.subheader("📊 当前持仓")
+
+stock_pool = load_stock_pool()
+
+if stock_pool:
+    # 获取数据
+    codes = [s["code"] for s in stock_pool]
     
-    st.divider()
+    with st.spinner("加载数据中..."):
+        realtime_df = get_realtime_quote(codes)
+        market_cap_df = get_stock_market_cap(codes)
     
-    st.subheader("删除股票")
-    if stock_pool:
-        codes_to_remove = [f"{s['code']} - {s['name']}" for s in stock_pool]
-        selected = st.selectbox("选择要删除的股票", codes_to_remove)
+    # 构建显示数据
+    display_data = []
+    
+    for stock in stock_pool:
+        code = stock["code"]
+        row_data = {
+            "代码": code,
+            "名称": stock["name"],
+            "标签": stock.get("tags", "-")
+        }
         
-        if st.button("🗑️ 删除", type="secondary", use_container_width=True):
+        # 获取实时价格
+        if realtime_df is not None and not realtime_df.empty:
+            stock_rt = realtime_df[realtime_df["代码"] == code]
+            if not stock_rt.empty:
+                rt = stock_rt.iloc[0]
+                try:
+                    price = float(rt.get('最新价', rt.get('close', 0)))
+                    row_data["最新价"] = f"{price:.2f}"
+                except:
+                    row_data["最新价"] = "-"
+            else:
+                row_data["最新价"] = "-"
+        else:
+            row_data["最新价"] = "-"
+        
+        # 获取市值
+        if market_cap_df is not None and not market_cap_df.empty:
+            cap_row = market_cap_df[market_cap_df["代码"] == code]
+            if not cap_row.empty:
+                try:
+                    mv = float(cap_row.iloc[0].get('总市值', 0))
+                    # 转换为亿
+                    row_data["市值(亿)"] = f"{mv/10000:.1f}"
+                except:
+                    row_data["市值(亿)"] = "-"
+            else:
+                row_data["市值(亿)"] = "-"
+        else:
+            row_data["市值(亿)"] = "-"
+        
+        # 计算技术打分
+        try:
+            df = get_stock_data(code, lookback=60)
+            if df is not None and not df.empty:
+                df = calculate_all_indicators(df)
+                score, reason = calculate_technical_score(df)
+                row_data["技术分"] = f"{get_score_color(score)} {score}"
+                row_data["评分说明"] = reason
+            else:
+                row_data["技术分"] = "-"
+                row_data["评分说明"] = "无数据"
+        except:
+            row_data["技术分"] = "-"
+            row_data["评分说明"] = "计算失败"
+        
+        display_data.append(row_data)
+    
+    # 显示表格
+    df_display = pd.DataFrame(display_data)
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    
+    # 删除功能
+    st.subheader("🗑️ 删除股票")
+    col_del, _ = st.columns([1, 3])
+    with col_del:
+        codes_to_remove = [f"{s['code']} - {s['name']}" for s in stock_pool]
+        selected = st.selectbox("选择要删除的股票", codes_to_remove, key="delete_select")
+        
+        if st.button("删除选中股票", type="secondary"):
             code = selected.split(" - ")[0]
             success, msg = remove_stock(code)
             if success:
@@ -104,53 +153,12 @@ with col2:
                 st.rerun()
             else:
                 st.error(msg)
-    else:
-        st.info("股票池为空")
 
-# 涨跌幅排行
-st.divider()
-st.subheader("📊 涨跌幅排行")
-
-if stock_pool and realtime_df is not None and not realtime_df.empty:
-    col_up, col_down = st.columns(2)
-    
-    with col_up:
-        st.markdown("**🔴 涨幅榜**")
-        try:
-            # 尝试获取涨跌幅字段
-            if '涨跌幅' in realtime_df.columns:
-                up_df = realtime_df[realtime_df["涨跌幅"] > 0].sort_values("涨跌幅", ascending=False)
-            elif 'pct_change' in realtime_df.columns:
-                up_df = realtime_df[realtime_df["pct_change"] > 0].sort_values("pct_change", ascending=False)
-            else:
-                up_df = pd.DataFrame()
-            
-            if not up_df.empty:
-                for idx, row in up_df.head(5).iterrows():
-                    code = row['代码']
-                    name = row.get('名称', code)
-                    change = row.get('涨跌幅', row.get('pct_change', 0))
-                    st.markdown(f"**{name}** ({code}) +{float(change):.2f}%")
-        except Exception as e:
-            st.info("暂无涨幅数据")
-    
-    with col_down:
-        st.markdown("**🟢 跌幅榜**")
-        try:
-            if '涨跌幅' in realtime_df.columns:
-                down_df = realtime_df[realtime_df["涨跌幅"] < 0].sort_values("涨跌幅")
-            elif 'pct_change' in realtime_df.columns:
-                down_df = realtime_df[realtime_df["pct_change"] < 0].sort_values("pct_change")
-            else:
-                down_df = pd.DataFrame()
-            
-            if not down_df.empty:
-                for idx, row in down_df.head(5).iterrows():
-                    code = row['代码']
-                    name = row.get('名称', code)
-                    change = row.get('涨跌幅', row.get('pct_change', 0))
-                    st.markdown(f"**{name}** ({code}) {float(change):.2f}%")
-        except Exception as e:
-            st.info("暂无跌幅数据")
 else:
-    st.info("暂无涨跌幅排行数据")
+    st.info("股票池为空，请添加股票")
+
+# ========== 统计信息 ==========
+st.divider()
+if stock_pool:
+    total_stocks = len(stock_pool)
+    st.metric("持仓数量", f"{total_stocks} 只")
