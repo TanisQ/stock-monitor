@@ -1,50 +1,95 @@
 import json
 import os
 import requests
+import base64
 
-# 从 GitHub 读取股票池
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/TanisQ/stock-monitor/main/data/stock_pool.json"
-LOCAL_POOL_FILE = "/tmp/stock_pool.json"
+# GitHub 配置
+GITHUB_TOKEN = "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"
+GITHUB_REPO = "TanisQ/stock-monitor"
+GITHUB_FILE_PATH = "data/stock_pool.json"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
 
-def load_stock_pool():
-    """加载股票池"""
-    try:
-        # 优先从 GitHub 获取
-        response = requests.get(GITHUB_RAW_URL, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if data and isinstance(data, list):
-                # 保存到本地临时文件
-                with open(LOCAL_POOL_FILE, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                return data
-    except Exception as e:
-        print(f"从GitHub加载失败: {e}")
+# 本地缓存
+_local_cache = None
+_file_sha = None
+
+def _get_file_sha():
+    """获取 GitHub 文件的 SHA"""
+    global _file_sha
+    if _file_sha:
+        return _file_sha
     
-    # 使用本地文件
     try:
-        if os.path.exists(LOCAL_POOL_FILE):
-            with open(LOCAL_POOL_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if data and isinstance(data, list):
-                    return data
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        response = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
+        if response.status_code == 200:
+            _file_sha = response.json().get("sha")
+            return _file_sha
     except:
         pass
+    return None
+
+def load_stock_pool():
+    """从 GitHub 加载股票池"""
+    global _local_cache
+    
+    if _local_cache is not None:
+        return _local_cache
+    
+    try:
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        response = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            content = response.json().get("content", "")
+            decoded = base64.b64decode(content).decode('utf-8')
+            data = json.loads(decoded)
+            if data and isinstance(data, list):
+                _local_cache = data
+                return data
+    except Exception as e:
+        print(f"加载失败: {e}")
     
     # 默认股票池
-    return [
+    default = [
         {"code": "600426", "name": "华鲁恒升", "industry": "化工"},
         {"code": "600276", "name": "恒瑞医药", "industry": "医药"},
         {"code": "000963", "name": "华东医药", "industry": "医药"},
         {"code": "002262", "name": "恩华药业", "industry": "医药"}
     ]
+    _local_cache = default
+    return default
 
-def save_stock_pool(stock_pool):
-    """保存股票池到本地"""
+def save_stock_pool_to_github(stock_pool):
+    """保存到 GitHub"""
+    global _local_cache, _file_sha
+    
     try:
-        with open(LOCAL_POOL_FILE, "w", encoding="utf-8") as f:
-            json.dump(stock_pool, f, ensure_ascii=False, indent=2)
-        return True
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        sha = _get_file_sha()
+        
+        content = json.dumps(stock_pool, ensure_ascii=False, indent=2)
+        encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        
+        data = {
+            "message": "Update stock pool via app",
+            "content": encoded,
+            "sha": sha
+        }
+        
+        response = requests.put(GITHUB_API_URL, headers=headers, json=data, timeout=10)
+        
+        if response.status_code in [200, 201]:
+            _local_cache = stock_pool
+            _file_sha = response.json().get("content", {}).get("sha")
+            return True
+        else:
+            print(f"GitHub API 错误: {response.status_code}")
+            return False
     except Exception as e:
         print(f"保存失败: {e}")
         return False
@@ -52,6 +97,7 @@ def save_stock_pool(stock_pool):
 def add_stock(code, name, industry=""):
     """添加股票"""
     stock_pool = load_stock_pool()
+    
     for stock in stock_pool:
         if stock["code"] == code:
             return False, f"股票 {code} 已存在"
@@ -61,22 +107,35 @@ def add_stock(code, name, industry=""):
         "name": name,
         "industry": industry
     })
-    save_stock_pool(stock_pool)
-    return True, f"股票 {code} {name} 添加成功"
+    
+    if save_stock_pool_to_github(stock_pool):
+        return True, f"添加成功: {name} ({code})"
+    else:
+        stock_pool.pop()
+        return False, "添加失败，请重试"
 
 def remove_stock(code):
     """删除股票"""
     stock_pool = load_stock_pool()
     original_len = len(stock_pool)
-    stock_pool = [s for s in stock_pool if s["code"] != code]
+    
+    removed = None
+    for i, stock in enumerate(stock_pool):
+        if stock["code"] == code:
+            removed = stock_pool.pop(i)
+            break
     
     if len(stock_pool) < original_len:
-        save_stock_pool(stock_pool)
-        return True, f"股票 {code} 删除成功"
+        if save_stock_pool_to_github(stock_pool):
+            return True, f"删除成功: {removed.get('name', '')} ({code})"
+        else:
+            stock_pool.append(removed)
+            return False, "删除失败，请重试"
+    
     return False, f"股票 {code} 不存在"
 
 def get_industries():
-    """获取所有行业分类"""
+    """获取行业列表"""
     try:
         stock_pool = load_stock_pool()
         if not stock_pool:
