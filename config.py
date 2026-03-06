@@ -7,10 +7,25 @@ STOCK_POOL_FILE = os.path.join(DATA_DIR, "stock_pool.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DEFAULT_STOCK_POOL = [
-    {"code": "600426", "name": "华鲁恒升", "category": "化工"},
-    {"code": "000001", "name": "平安银行", "category": "银行"},
-    {"code": "300750", "name": "宁德时代", "category": "新能源"},
+    {"code": "600426", "name": "华鲁恒升", "tags": "化工,价值投资"},
+    {"code": "000001", "name": "平安银行", "tags": "银行,金融"},
+    {"code": "300750", "name": "宁德时代", "tags": "新能源,成长"},
 ]
+
+def add_stock(code, name, tags=""):
+    """添加股票，tags是标签"""
+    stock_pool = load_stock_pool()
+    for stock in stock_pool:
+        if stock["code"] == code:
+            return False, f"股票 {code} 已存在"
+    
+    stock_pool.append({
+        "code": code,
+        "name": name,
+        "tags": tags
+    })
+    save_stock_pool(stock_pool)
+    return True, f"股票 {code} {name} 添加成功"
 
 def load_stock_pool():
     if os.path.exists(STOCK_POOL_FILE):
