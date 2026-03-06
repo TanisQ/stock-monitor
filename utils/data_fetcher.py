@@ -97,13 +97,22 @@ def get_stock_market_cap(codes):
         
         # 获取每日指标（包含市值）
         df = pro.daily_basic(ts_code=",".join(ts_codes), 
-                            trade_date=datetime.now().strftime("%Y%m%d"),
-                            fields='ts_code,total_mv,circ_mv')
+                            trade_date=datetime.now().strftime("%Y%m%d"))
         
         if df is not None and not df.empty:
             df['代码'] = df['ts_code'].str.replace('.SH', '').str.replace('.SZ', '')
-            df['总市值'] = df['total_mv']  # 单位：万元
-            return df[[['代码', '总市值', '流通市值']]
+            
+            # 检查字段名（Tushare可能用不同名称）
+            if 'total_mv' in df.columns:
+                df['总市值'] = df['total_mv']
+            elif 'circ_mv' in df.columns:
+                # 如果没有总市值，用流通市值
+                df['总市值'] = df['circ_mv']
+            
+            return df[[['代码', '总市值']]
+        return None
+    except Exception as e:
+        print(f"获取市值失败: {e}")
         return None
     except Exception as e:
         print(f"获取市值失败: {e}")
