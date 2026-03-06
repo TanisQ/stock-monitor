@@ -65,3 +65,46 @@ def get_stock_name(code):
         return df["name"].values[0] if not df.empty else code
     except:
         return code
+
+def search_stock_by_name(name):
+    """根据股票名称搜索股票代码"""
+    try:
+        # 获取所有股票列表
+        df = pro.stock_basic(exchange='', list_status='L', 
+                            fields='ts_code,symbol,name,industry')
+        # 模糊搜索
+        result = df[df['name'].str.contains(name, na=False)]
+        if not result.empty:
+            row = result.iloc[0]
+            code = row['symbol']
+            full_name = row['name']
+            industry = row['industry'] if pd.notna(row['industry']) else "其他"
+            return code, full_name, industry
+        return None, None, None
+    except Exception as e:
+        print(f"搜索股票失败: {e}")
+        return None, None, None
+
+def get_stock_market_cap(codes):
+    """获取股票市值"""
+    try:
+        ts_codes = []
+        for code in codes:
+            if code.startswith("6"):
+                ts_codes.append(f"{code}.SH")
+            else:
+                ts_codes.append(f"{code}.SZ")
+        
+        # 获取每日指标（包含市值）
+        df = pro.daily_basic(ts_code=",".join(ts_codes), 
+                            trade_date=datetime.now().strftime("%Y%m%d"),
+                            fields='ts_code,total_mv,circ_mv')
+        
+        if df is not None and not df.empty:
+            df['代码'] = df['ts_code'].str.replace('.SH', '').str.replace('.SZ', '')
+            df['总市值'] = df['total_mv']  # 单位：万元
+            return df[[['代码', '总市值', '流通市值']]
+        return None
+    except Exception as e:
+        print(f"获取市值失败: {e}")
+        return None
