@@ -4,7 +4,7 @@ import requests
 import base64
 
 # GitHub 配置
-GITHUB_TOKEN = "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"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = "TanisQ/stock-monitor"
 GITHUB_FILE_PATH = "data/stock_pool.json"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
